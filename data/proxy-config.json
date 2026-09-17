@@ -1,0 +1,11 @@
+{
+  "autoSync": true,
+  "intervalMinutes": 30,
+  "concurrency": 120,
+  "timeoutMs": 6000,
+  "maxConsecutiveFail": 3,
+  "minScore": 20,
+  "exportLimit": 200,
+  "detectGeo": true,
+  "detectAnonymity": true
+}
