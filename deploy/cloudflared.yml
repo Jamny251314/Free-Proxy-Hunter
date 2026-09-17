@@ -1,0 +1,82 @@
+# 免费代理猎手 · Cloudflare Tunnel（命名隧道）配置
+# ---------------------------------------------------------------
+# 这是**最贴合本项目的 Cloudflare 用法**：不需要公网 IP、不用在防火墙开端口，
+# 由 cloudflared 主动向外建立连接，适合部署在家里/内网的机器上。
+#
+# 为什么不用 Cloudflare Workers 跑这个后端：
+#   Workers 是边缘隔离运行时，不提供这个应用依赖的几样东西 ——
+#     · node:fs —— 代理池/会话记录是落盘到 data/ 的（需要改写成 D1/R2/KV）
+#     · node:net 原始 TCP —— 代理测速靠它做 HTTP/SOCKS 握手
+#     · 子进程 —— Agent SDK 要拉起内置的 CodeBuddy CLI 可执行文件
+#     · 跨请求内存态 —— 代理池是整个进程共享的一份内存对象
+#   这四项都不是「配置一下」能绕过的，属于运行时能力缺失。
+#   要在 Cloudflare 上跑，只能把后端整个重写成 Worker + Durable Object + D1，
+#   那已经是另一个项目了。所以 Cloudflare 侧的定位是：
+#     隧道（暴露）+ Access（鉴权）+ 可选 Pages（托管前端静态产物）。
+#
+# 使用步骤：
+#   1. 登录并授权
+#        cloudflared tunnel login
+#   2. 创建隧道（拿到 TUNNEL_ID 与凭据文件）
+#        cloudflared tunnel create proxy-hunter
+#   3. 把下面两行的占位符换掉，文件放到 /etc/cloudflared/config.yml
+#   4. 绑定域名
+#        cloudflared tunnel route dns proxy-hunter hunter.example.com
+#   5. 起服务
+#        sudo cloudflared service install && sudo systemctl enable --now cloudflared
+#   6. 鉴权（强烈建议，见文末）
+#
+# 临时试一下（不需要上面任何配置，会给你一个随机域名）：
+#   cloudflared tunnel --url http://127.0.0.1:3000
+#   ⚠️ 这种快速隧道是公开的、无鉴权，任何人都能访问 —— 只用来看一眼能不能打开。
+
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_ID.json
+
+# 本地指标端口，排障时看 http://127.0.0.1:20241/ready
+metrics: 127.0.0.1:20241
+
+no-autoupdate: true
+
+# 所有入口共享的默认值
+originRequest:
+  # 首字节等待时间：代理池首轮采集/测速会占用一些时间
+  connectTimeout: 30s
+  # SSE（/api/chat、/api/proxy/stream）是长连接，
+  # 保持 TCP 存活，避免边缘在空闲时把连接掐掉导致「对话流中断」
+  tcpKeepAlive: 30s
+  keepAliveTimeout: 90s
+  keepAliveConnections: 10
+  # 关掉分块编码的额外处理，让 event-stream 尽快透传
+  disableChunkedEncoding: false
+
+ingress:
+  - hostname: hunter.example.com
+    service: http://127.0.0.1:3000
+    originRequest:
+      # 后端用 Host 生成 Clash 订阅地址，必须把外部域名透传进去，
+      # 否则生成出来的链接会指向 127.0.0.1:3000，在手机/其他机器上用不了
+      httpHostHeader: hunter.example.com
+
+  # 兜底规则：不匹配的域名一律 404，必须放在最后
+  - service: http_status:404
+
+# ---------------------------------------------------------------------------
+# ⚠️ 务必配上 Cloudflare Access —— 本项目没有任何内置鉴权
+# ---------------------------------------------------------------------------
+# Tunnel 本身只负责「能访问」，不负责「谁能访问」。配上 Access 之后，
+# 连页面带 API 都被 Cloudflare 的边缘挡住，未登录者根本到不了后端，
+# 这比在后端加鉴权更省事，也不需要改代码。
+#
+# 控制台配置（Zero Trust → Access → Applications → Add an application → Self-hosted）：
+#   · Application domain 填 hunter.example.com（路径留空，覆盖整站）
+#   · Policy 选 Allow，规则例如 Emails = 你的邮箱
+#   · 保存后会用邮箱验证码 / SSO 登录，通过后才转发到隧道
+#
+# 两点注意：
+#   · /api/health 也被 Access 挡住，若你要用外部探活，为该路径单独建一条 Bypass 策略。
+#   · Access 与 Cloudflare 免费版兼容，个人使用够用。
+#
+# 另外：cloudflared 回源来自本机，后端 index.ts 里的 trust proxy 默认信任
+# loopback 就够了，不需要额外配置 —— 这样 HTTPS 部署时页面生成的
+# Clash 订阅地址才会正确带上 https://。

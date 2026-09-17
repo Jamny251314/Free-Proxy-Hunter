@@ -11,20 +11,14 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { CHAT_DB_FILE, CHAT_JSON_FILE } from './paths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-const DB_PATH = path.join(dataDir, 'chat.db');
-const JSON_PATH = path.join(dataDir, 'chat.json');
+// 数据目录同样收敛到 ./paths.ts：与代理池共用同一个目录（默认 <项目根>/data，
+// 可用 DATA_DIR 覆盖），容器部署只需要挂一个 volume。
+// 该模块被 import 时就已确保目录存在，这里不再重复 mkdir。
+const DB_PATH = CHAT_DB_FILE;
+const JSON_PATH = CHAT_JSON_FILE;
 
 /* ------------------------------------------------------------------ */
 /* 类型定义                                                            */

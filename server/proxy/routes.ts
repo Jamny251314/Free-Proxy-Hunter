@@ -7,6 +7,7 @@
 import type { Express, Request, Response } from 'express';
 import { SOURCES } from './sources.js';
 import { pool } from './store.js';
+import { CLASH_FILE } from '../paths.js';
 import {
   engineEvents,
   exportNow,
@@ -245,13 +246,20 @@ export function registerProxyRoutes(app: Express): void {
 
   /** 供前端复制粘贴的引用片段 */
   app.get('/api/proxy/clash-snippet', (req: Request, res: Response) => {
-    const host = req.get('host') ?? '127.0.0.1:3000';
-    const selfUrl = `http://${host}/api/proxy/clash-provider.yaml`;
+    const host = req.get('host') ?? `127.0.0.1:${process.env.PORT || 3000}`;
+    // 协议必须跟着请求走，不能写死 http://。
+    // 部署在 Nginx / Cloudflare Tunnel 之后对外是 HTTPS，写死 http 会让页面复制出去的
+    // 订阅地址在 Clash 里因「明文混用 / 端口不对」而拉不到配置。
+    // 这依赖 index.ts 里开启的 trust proxy，否则 req.protocol 恒为 http。
+    const proto = req.protocol || 'http';
+    const selfUrl = `${proto}://${host}/api/proxy/clash-provider.yaml`;
     res.json({
       selfUrl,
       snippet: buildProviderSnippet(selfUrl),
-      configUrl: `http://${host}/api/proxy/clash.yaml`,
-      localFile: 'data/clash-proxies.yaml',
+      configUrl: `${proto}://${host}/api/proxy/clash.yaml`,
+      // 跟随 DATA_DIR：容器里数据目录可能是 /app/data 之外的挂载点，
+      // 写死 'data/...' 会让用户去一个不存在的路径找文件。
+      localFile: CLASH_FILE,
     });
   });
 

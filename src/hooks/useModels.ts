@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Model } from '../types';
+import { apiUrl } from '../api';
 
 const STORAGE_KEY = 'defaultModel';
 
@@ -11,7 +12,7 @@ export function useModels() {
 
   const fetchModels = useCallback(async () => {
     try {
-      const res = await fetch('/api/models');
+      const res = await fetch(apiUrl('/api/models'));
       const data = await res.json();
       setModels(data.models || []);
       if (data.models?.length > 0 && !selectedModel) {

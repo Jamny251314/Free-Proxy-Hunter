@@ -120,6 +120,13 @@ npm start          # 等价于 npm run server
 
 `.env` 的路径固定在项目根（`server/index.ts` 的上一级），与你在哪个目录启动无关。
 
+部署形态相关的几个变量：`HOST`（监听地址，默认 `0.0.0.0`）、`DATA_DIR`（数据目录，
+默认 `<项目根>/data`）、`TRUST_PROXY`（默认 `loopback`，即信任同机反向代理）、
+`CORS_ORIGINS`（默认空 = 关闭跨域）。完整清单见「部署相关变量一览」。
+
+`VITE_API_BASE_URL` 是**唯一一个构建期变量**，其余都是运行期。它只影响前端的请求地址，
+改了要重新 `npm run build`，重启服务没用。
+
 代理引擎的三个变量是**例外**：`PROXY_CONCURRENCY` / `PROXY_TIMEOUT_MS` / `PROXY_MAX_FAIL`
 只在首次启动、还没有 `data/proxy-config.json` 时作为初始值。一旦在页面「引擎设置」里改过任何一项，
 配置文件就生成了，之后一律以文件为准 —— 想强制重置就删掉该文件再重启。
@@ -135,8 +142,10 @@ npm start          # 等价于 npm run server
 ### 需要准备什么
 
 - 一台能访问 npm 源和 CodeBuddy API 的服务器（Linux 推荐，Windows 亦可）
-- Node.js 20.12+（推荐 22）
+- Node.js **20.12+**（推荐 22）。**发行版要 glibc ≥ 2.28** —— CentOS 7 不满足，详见 `deploy/README.md`
 - 不需要装 CodeBuddy CLI，有 `CODEBUDDY_API_KEY` 即可
+- `deploy/` 下已备好可直接复制的模板：`proxy-hunter.service`（systemd）、
+  `nginx.conf`、`cloudflared.yml`（Cloudflare Tunnel）、`pages/_redirects`（Cloudflare Pages）
 
 ### 1. 上传代码
 
@@ -225,8 +234,12 @@ User=appuser
 WorkingDirectory=/opt/proxy-hunter-agent
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=CODEBUDDY_API_KEY=sk-xxxxxxxx
+Environment=HOST=127.0.0.1
+Environment=DATA_DIR=/var/lib/proxy-hunter
+EnvironmentFile=/opt/proxy-hunter-agent/.env
 ExecStart=/usr/bin/node /opt/proxy-hunter-agent/node_modules/tsx/dist/cli.mjs server/index.ts
+KillSignal=SIGTERM
+TimeoutStopSec=30
 Restart=always
 RestartSec=5
 
@@ -234,8 +247,12 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+**仓库里已经有写好的完整版本**：`deploy/proxy-hunter.service`（含安装步骤、日志、
+以及一组刻意不加的加固项及其原因）。用现成的比手抄这份简写更稳妥。
+
 `ExecStart` 直接写 `node + tsx` 而不是 `npm start`，是为了少一层 npm 进程，
-让 systemd 能正确判断存活、干净地重启。
+让 systemd 能正确判断存活、干净地重启，也让 `SIGTERM` 直达应用 ——
+后者关系到「停止服务时会不会丢掉刚测完的那批代理」。
 
 ### 6. 目录权限
 
@@ -302,20 +319,128 @@ server {
 也可以让 Nginx 直接托管 `dist/`、只把 `/api` 转发到 3000（标准 SPA + `try_files $uri /index.html`）。
 功能一致，本项目默认用前一种，少一份配置。
 
-### 容器化
+### 容器化（Docker）
 
-本机没有 Docker 环境，所以**没有提供未经验证的 Dockerfile**。若要在容器里跑，注意：
+仓库自带 `Dockerfile`、`.dockerignore`、`docker-compose.yml`：
 
-- 镜像里需要 `dist/`。可用多阶段构建：先 `npm ci` 装全量依赖 + `npm run build`，
-  再 `npm ci --omit=dev` 并拷入 `dist/`。
-- **`data/` 必须挂成 volume**，否则重建容器会丢掉整池代理和会话记录。
-- 容器化**不能**替代认证：把端口映射到宿主机时，仍然是「谁访问谁就能用你的 API Key」。
+```bash
+cp .env.example .env        # 至少填 CODEBUDDY_API_KEY
+docker compose up -d --build
+docker compose logs -f app
+```
+
+几个刻意的选择（都写在 `Dockerfile` 注释里，改动前建议先读）：
+
+| 决定 | 原因 |
+| --- | --- |
+| 基础镜像用 `bookworm-slim`，**不是 alpine** | Agent SDK 内置的 CodeBuddy CLI 与 `better-sqlite3` 都要 glibc，musl 跑不起来 |
+| 默认带 `--ignore-scripts` | `better-sqlite3` 的 install 脚本要从 GitHub Releases 拉预编译包；拉不到时 npm 会**静默挂住**。跳过它只损失 SQLite，应用会自动降级为 JSON 存储 |
+| 启动命令是 `node tsx …` 而非 `npm start` | npm 多一层进程，SIGTERM 不一定透传到应用，优雅退出就白写了 |
+| 用官方镜像自带的 `node` 用户（非 root） | 容器里的基本要求 |
+| `DATA_DIR=/app/data` 且声明为 `VOLUME` | 不挂卷时容器一重建代理池就空了，表现为「网站能打开但池子是空的」，极易误判成程序坏了 |
+| 端口默认只绑 `127.0.0.1:3000` | 应用无鉴权，对外必须先过反向代理 |
+
+想要 SQLite 存储会话（而不是 JSON 降级）：
+
+```bash
+docker build --build-arg INSTALL_NATIVE_SQLITE=true -t proxy-hunter-agent .
+```
+
+连 Cloudflare Tunnel 一起跑（需在 `.env` 里填 `CLOUDFLARE_TUNNEL_TOKEN`）：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+> 本机没有 Docker 环境，**这个镜像没有在本机实际构建验证过**。改动后请在目标机器上跑一次
+> `docker build` + `docker run`。已验证的是容器外的部分：`npm run build` 与单端口运行完全正常。
+
+### 部署到 Cloudflare
+
+先给结论：**Cloudflare Workers 跑不了这个后端**。不是配置问题，是运行时能力缺失：
+
+| 后端依赖的能力 | Workers | 影响 |
+| --- | --- | --- |
+| `node:fs` 文件读写 | 无 | 代理池、引擎配置、Clash 产物、会话记录都落盘在 `data/` |
+| `node:net` 原始 TCP | 无 | 测速要做 HTTP/SOCKS 握手并按字节计时 |
+| 子进程 | 无 | Agent SDK 要拉起内置的 CodeBuddy CLI 可执行文件 |
+| 跨请求共享的内存状态 | 无 | 代理池是一份进程内共享对象，不是每请求一份 |
+| `better-sqlite3` 原生模块 | 无 | 会话存储的可选驱动 |
+
+把这五项都绕过去，等于把后端重写成 Worker + Durable Object + D1/R2 —— 那是另一个项目。
+所以 Cloudflare 在这里的正确用法是三件事：
+
+**① 隧道暴露（`deploy/cloudflared.yml`，推荐）**
+
+不需要公网 IP、不用在防火墙开端口，cloudflared 主动向外建连：
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create proxy-hunter
+# 把 deploy/cloudflared.yml 里的 REPLACE_WITH_TUNNEL_ID 换掉，放到 /etc/cloudflared/config.yml
+cloudflared tunnel route dns proxy-hunter hunter.example.com
+sudo cloudflared service install && sudo systemctl enable --now cloudflared
+```
+
+回源来自本机，所以后端 `trust proxy` 的默认值（信任 loopback）就够用，不用额外配。
+
+**② Cloudflare Access 做鉴权（强烈建议）**
+
+隧道只解决「能访问」，不解决「谁能访问」。在 Zero Trust → Access → Applications 建一个
+Self-hosted 应用指向你的域名，加一条 `Allow / Emails = 你的邮箱` 策略即可。
+未登录者被挡在 Cloudflare 边缘、根本到不了后端 —— 比在后端自己加鉴权省事，且不改代码。
+
+注意 `/api/health` 也会被挡住；要用它做外部探活，就为该路径单独建一条 Bypass 策略。
+
+**③ Cloudflare Pages 托管前端（`deploy/pages/_redirects`）**
+
+前端是纯静态产物，可以放 Pages。推荐用重写规则让 `/api` 保持**同源**：
+
+```
+/api/*  https://hunter-api.example.com/api/:splat  200
+/*      /index.html                                 200
+```
+
+把它放到 `public/_redirects`（Vite 会复制进 `dist/`），构建输出目录设为 `dist`。
+这样浏览器不触发跨域，前端里的 `/api/...` 相对路径原样可用。
+
+不想用代理规则、改成跨域直连后端也行，但两边都要配：
+
+```bash
+VITE_API_BASE_URL=https://hunter-api.example.com npm run build   # 构建前端时注入
+```
+```bash
+CORS_ORIGINS=https://your-project.pages.dev                      # 后端允许该来源
+```
+
+> `VITE_` 变量是**构建期**注入的：改完必须重新 build，只改服务器环境变量不会生效。
+> 「配置改了页面没反应」最常见的原因就是这条。
+
+### Linux / CentOS 注意事项
+
+完整说明见 **`deploy/README.md`**，这里只列最容易踩的几条：
+
+- **CentOS 7 装不上 Node 22**：Node 18+ 的官方二进制要求 **glibc ≥ 2.28**，CentOS 7 是 2.17，
+  直接报 `GLIBC_2.28 not found`。CentOS 7 也已于 2024-06 EOL、NodeSource 停止支持。
+  建议换 Rocky / Alma / CentOS Stream 9；必须留在 CentOS 7 就把应用放进容器跑。
+- **RHEL 系 SELinux 会拦住 Nginx 反代**：症状是 502，错误日志里是
+  `Permission denied while connecting to upstream` —— 与防火墙无关，执行
+  `sudo setsebool -P httpd_can_network_connect 1` 即可。
+- **别给 systemd 单元加 `ProtectSystem=strict` / `ProtectHome=true`**：本项目的 Agent
+  按设计会读写项目文件（「加个代理源」会真的改 `sources.ts`），且 Agent SDK 拉起
+  CodeBuddy CLI 需要可写的 `HOME`。加上这两项会直接废掉功能。
+- **`data/` 只让运行用户可写**：容器挂卷时确认属主对得上，否则首次启动就是 EACCES。
 
 ### 部署相关变量一览
 
 | 变量 | 默认 | 作用 | 备注 |
 | --- | --- | --- | --- |
-| `PORT` | 3000 | 后端端口 | 生产只需要这一个端口 |
+| `PORT` | 3000 | 监听端口 | 生产只需要这一个端口 |
+| `HOST` | `0.0.0.0` | 监听地址 | 设成 `127.0.0.1` 可强制外部只能经反向代理访问 |
+| `DATA_DIR` | `<项目根>/data` | 数据目录 | 容器 / 服务化部署建议设为绝对路径 |
+| `TRUST_PROXY` | `loopback` | 信任哪些代理的 `X-Forwarded-*` | 同机 Nginx / Tunnel 用默认值即可；代理不在本机时填网段；无代理时填 `false` |
+| `CORS_ORIGINS` | 空 | 允许的前端来源，逗号分隔 | 留空 = 完全关闭跨域；前后端同源部署不需要 |
+| `VITE_API_BASE_URL` | 空 | 前端请求的后端地址 | **构建期**生效；留空 = 同源 |
 | `CODEBUDDY_API_KEY` | 空 | API Key 鉴权 | 与 `CODEBUDDY_AUTH_TOKEN` 二选一 |
 | `CODEBUDDY_AUTH_TOKEN` | 空 | 登录态 Token 鉴权 | |
 | `CODEBUDDY_INTERNET_ENVIRONMENT` | 空 | 内网 / 私有化环境标识 | 公网环境留空 |
@@ -324,6 +449,7 @@ server {
 | `PROXY_TIMEOUT_MS` | 6000 | 单条探测超时（毫秒） | 同上 |
 | `PROXY_MAX_FAIL` | 3 | 连续失败几次判失效 | 同上 |
 | `VITE_PORT` | 5173 | 前端开发端口 | 仅 `npm run dev` 用到 |
+| `CLOUDFLARE_TUNNEL_TOKEN` | 空 | 隧道 token | 仅 `docker compose --profile tunnel` 用到 |
 
 ---
 
@@ -480,7 +606,8 @@ CLI 与 Web 服务共享同一份 `data/proxies.json`，可以混用。
 ```
 proxy-hunter-agent/
 ├── server/
-│   ├── index.ts              # Express + SSE + Agent SDK 接入 + .env 加载 + 生产静态托管
+│   ├── index.ts              # Express + SSE + Agent SDK 接入 + .env 加载 + 静态托管 + 优雅退出
+│   ├── paths.ts              # 数据目录唯一权威（DATA_DIR 环境变量在此解析）
 │   ├── prompt.ts             # 「代理猎手」Agent 权威提示词
 │   ├── cli.ts                # 命令行入口
 │   ├── db.ts                 # 会话与消息持久化（SQLite，装不上时自动降级 JSON）
@@ -488,17 +615,22 @@ proxy-hunter-agent/
 │       ├── types.ts          # 类型定义
 │       ├── net.ts            # HTTP/SOCKS 隧道、代理请求、延迟测量
 │       ├── sources.ts        # 代理源清单与解析器
-│       ├── store.ts          # 代理池持久化、去重、评分、淘汰
+│       ├── store.ts          # 代理池持久化、去重、评分、淘汰（防抖写盘）
 │       ├── clash.ts          # Clash / Mihomo 配置生成
 │       ├── engine.ts         # 采集 / 测速 / 同步 / 定时调度
 │       └── routes.ts         # REST API + SSE
 ├── src/
+│   ├── api.ts                # apiUrl() —— 前端请求地址统一入口（VITE_API_BASE_URL）
 │   ├── pages/ProxyPage.tsx   # 代理池控制台
 │   ├── components/proxy/     # 统计卡片、表格、Clash 面板、设置、源清单、日志
 │   ├── hooks/useProxyPool.ts # 代理池状态与 SSE 订阅
 │   └── ...                   # 模板自带的聊天界面
+├── deploy/                   # 部署模板（systemd / Nginx / Cloudflare，见 deploy/README.md）
 ├── dist/                     # npm run build 的产物；存在时由后端单端口一并托管
 ├── data/                     # 运行时数据（代理池、引擎配置、Clash 文件、会话记录），首次启动自动创建
+├── Dockerfile                # 多阶段构建（bookworm-slim，非 alpine）
+├── docker-compose.yml        # 含可选 cloudflared 服务
+├── .dockerignore
 ├── .env.example              # 环境变量模板（可复制为 .env；真实环境变量优先级更高）
 └── .codebuddy/skills/        # Agent 运维手册
 ```

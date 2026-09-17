@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session, Message } from '../types';
+import { apiUrl } from '../api';
 
 const STORAGE_KEYS = {
   sessionModels: 'sessionModels',
@@ -25,7 +26,7 @@ export function useSessions() {
   // 从 API 加载会话列表
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/sessions');
+      const res = await fetch(apiUrl('/api/sessions'));
       const data = await res.json();
       
       if (data.sessions) {
@@ -46,7 +47,7 @@ export function useSessions() {
   // 加载单个会话的消息
   const loadSessionMessages = useCallback(async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`);
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}`));
       const data = await res.json();
       
       if (data.messages) {
@@ -71,7 +72,7 @@ export function useSessions() {
   // 删除会话
   const deleteSession = useCallback(async (sessionId: string): Promise<string | null> => {
     try {
-      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      await fetch(apiUrl(`/api/sessions/${sessionId}`), { method: 'DELETE' });
       
       let navigateTo: string | null = null;
       

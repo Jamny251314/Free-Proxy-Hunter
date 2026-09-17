@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as db from "./db.js";
+import { DATA_DIR } from "./paths.js";
 import { registerProxyRoutes } from "./proxy/routes.js";
 import { pool } from "./proxy/store.js";
 import { applySchedule, resolveTargets } from "./proxy/engine.js";
@@ -53,10 +54,64 @@ if (typeof loadEnvFile === "function") {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+
+// 监听端口与地址。
+// 容器里必须监听 0.0.0.0 才能被端口映射访问到（这也是默认值）；
+// 只想允许本机访问时把 HOST 设为 127.0.0.1。
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
+
+// 反向代理支持。
+// 部署在 Nginx / Cloudflare Tunnel 之后时，req.protocol 与客户端 IP 只能从
+// X-Forwarded-* 头里取；不开这个的话，/api/proxy/clash-snippet 生成的订阅地址
+// 会永远是 http://，HTTPS 站点上复制出去就用不了。
+//
+// 默认只信任**回环地址**：同机的 Nginx / cloudflared 正属于这种，
+// 既解决了 HTTPS 下的协议判断，又不会因为服务直接暴露而被伪造的
+// X-Forwarded-For 骗到。代理不在本机时再按需调整 TRUST_PROXY。
+const trustProxy = process.env.TRUST_PROXY;
+if (trustProxy === undefined || trustProxy === "") {
+  app.set("trust proxy", "loopback");
+} else if (trustProxy === "false") {
+  app.set("trust proxy", false);
+} else if (trustProxy === "true") {
+  app.set("trust proxy", true);
+} else {
+  app.set("trust proxy", trustProxy); // 例如 "10.0.0.0/8" 或 "1"
+}
 
 // Middleware
 app.use(express.json());
+
+// 跨域支持：只有在 CORS_ORIGINS 里显式列出前端来源时才启用。
+// 用途是把前端静态产物放到别处托管（如 Cloudflare Pages）而后端留在服务器上；
+// 前后端同源部署（默认的单端口模式）完全不需要它，留空即关闭。
+//
+// 刻意不提供「放开全部来源」的开关：本应用没有任何鉴权，
+// 放开跨域等于把「谁都能用你的 API Key 跑对话」这件事扩展到任意网站。
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+if (corsOrigins.length > 0) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && corsOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Max-Age", "600");
+    }
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+  console.log(`[CORS] 已允许的来源：${corsOrigins.join(", ")}`);
+}
 
 // 缓存可用模型列表
 let cachedModels: Array<{ modelId: string; name: string; description?: string }> = [];
@@ -744,12 +799,16 @@ function printBanner(): void {
       line(),
       `╚${"═".repeat(INNER)}╝`,
       "",
+      // 数据目录放在定宽框之外：容器里的挂载点可能很长，塞进框会撑破边框。
+      // 这个信息在排障时最有用 —— 「数据怎么没了」几乎都是挂载点没对上。
+      `  数据目录: ${DATA_DIR}`,
+      "",
     ].join("\n"),
   );
 }
 
 // 启动服务器
-app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
   printBanner();
 
   // 恢复用户上次保存的自动更新设置
@@ -764,3 +823,32 @@ app.listen(PORT, () => {
     console.warn("[Targets] 预热失败:", e.message);
   });
 });
+
+// ============= 优雅退出 =============
+// 容器与 systemd 停止服务发的都是 SIGTERM（docker stop 会等 10 秒再 SIGKILL）。
+//
+// 代理池是**防抖写盘**（默认延迟 1.2 秒）：不显式 flush 的话，「刚测完一轮就重启容器」
+// 会丢掉最后一批结果，而且丢得很安静 —— 日志里没有任何异常，只是数据回到了上一轮。
+// pool.saveNow() 是同步写，返回即已落盘，所以随后可以直接退出。
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[Shutdown] 收到 ${signal}，正在退出…`);
+
+  // 停止接收新连接。SSE 长连接会让 close 回调迟迟不触发，
+  // 这里不等待它 —— 数据已经落盘，没必要为几条日志连接把进程拖住。
+  server.close();
+
+  try {
+    pool.saveNow();
+    console.log(`[Shutdown] 代理池已落盘（${pool.size()} 条）`);
+  } catch (err: any) {
+    console.error("[Shutdown] 代理池落盘失败:", err?.message);
+  }
+
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

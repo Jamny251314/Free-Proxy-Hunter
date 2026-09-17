@@ -6,8 +6,6 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type {
   Anonymity,
   EngineConfig,
@@ -17,17 +15,12 @@ import type {
   TaskProgress,
 } from './types.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// 数据目录的唯一权威定义在 ../paths.ts（支持 DATA_DIR 环境变量，容器挂卷要用）。
+// 这里 import 进来供本文件使用，同时原样 re-export —— 不打断既有的
+// `import { CLASH_FILE, DATA_DIR } from './store.js'` 这类引用，避免改动扩散到上层。
+import { DATA_DIR, PROXY_FILE, CONFIG_FILE, CLASH_FILE } from '../paths.js';
 
-export const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-export const PROXY_FILE = path.join(DATA_DIR, 'proxies.json');
-export const CONFIG_FILE = path.join(DATA_DIR, 'proxy-config.json');
-export const CLASH_FILE = path.join(DATA_DIR, 'clash-proxies.yaml');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+export { DATA_DIR, PROXY_FILE, CONFIG_FILE, CLASH_FILE };
 
 /**
  * 从环境变量读取一个正整数，非法值回落到默认值。

@@ -23,6 +23,7 @@ import {
 } from 'tdesign-icons-react';
 import { Bot, Sparkles, Code, FileText, Globe, Lightbulb } from 'lucide-react';
 import { CustomAgent, PermissionMode } from '../types';
+import { apiUrl } from '../api';
 
 interface SettingsPageProps {
   agents: CustomAgent[];
@@ -139,7 +140,7 @@ export function SettingsPage({
     setLoginStatus(prev => ({ ...prev, checking: true, error: undefined }));
     
     try {
-      const response = await fetch('/api/check-login');
+      const response = await fetch(apiUrl('/api/check-login'));
       const data = await response.json();
       
       setLoginStatus({
@@ -172,7 +173,7 @@ export function SettingsPage({
     
     setSavingEnv(true);
     try {
-      const response = await fetch('/api/save-env-config', {
+      const response = await fetch(apiUrl('/api/save-env-config'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

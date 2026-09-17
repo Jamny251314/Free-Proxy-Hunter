@@ -1,0 +1,102 @@
+# 免费代理猎手 · Docker Compose
+# ---------------------------------------------------------------
+# 快速开始：
+#   cp .env.example .env      # 至少填 CODEBUDDY_API_KEY
+#   docker compose up -d --build
+#   docker compose logs -f app
+#
+# 说明：
+#   · 端口默认只绑 127.0.0.1。本应用**没有鉴权**，谁连上谁就能用你的
+#     API Key 跑对话。对外请走 deploy/nginx.conf 或 Cloudflare Tunnel。
+#   · compose 会自动读取同目录的 .env 用于 ${} 插值，所以不写 env_file
+#     也能生效；没有 .env 时下列变量回落到空值，不会报错。
+#   · 数据在 ./data（宿主目录）里，容器重建不丢。
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # 需要 SQLite 存储会话时改 true（要求构建机能访问 GitHub Releases）
+        INSTALL_NATIVE_SQLITE: "false"
+    image: proxy-hunter-agent:latest
+    container_name: proxy-hunter
+    restart: unless-stopped
+
+    ports:
+      # 只监听回环：宿主机之外的机器连不上，必须先经过反向代理。
+      # 确实要直接暴露时改成 "3000:3000"，但请同时确认你已经加了访问控制。
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      DATA_DIR: "/app/data"
+
+      # --- CodeBuddy 鉴权（值取自同目录 .env）---
+      CODEBUDDY_API_KEY: "${CODEBUDDY_API_KEY:-}"
+      CODEBUDDY_AUTH_TOKEN: "${CODEBUDDY_AUTH_TOKEN:-}"
+      CODEBUDDY_INTERNET_ENVIRONMENT: "${CODEBUDDY_INTERNET_ENVIRONMENT:-}"
+      CODEBUDDY_BASE_URL: "${CODEBUDDY_BASE_URL:-}"
+
+      # --- 仅当把前端放到别的域名时才需要（如 Cloudflare Pages）---
+      # 填前端来源，逗号分隔，例如 https://hunter.pages.dev
+      # 留空 = 完全关闭跨域，同源部署不需要它
+      CORS_ORIGINS: "${CORS_ORIGINS:-}"
+
+      # 反向代理信任范围。**容器场景下不要用默认的 loopback** ——
+      # 请求来自 docker 网关，不是回环地址，填错会让 req.protocol 恒为 http，
+      # 页面复制出来的 Clash 订阅地址就会带错协议。
+      #   · 容器把端口交给宿主机 Nginx / 与 cloudflared 同网络 → 填 docker 网段："172.16.0.0/12"
+      #   · 前面完全没代理、端口直接暴露 → "false"
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+
+    volumes:
+      # 代理池 / 引擎配置 / Clash 产物 / 会话记录
+      # 换成命名卷也行：proxy-hunter-data:/app/data
+      - ./data:/app/data
+
+    # 给优雅退出留时间：停容器时应用会把防抖中的代理池写盘再退出（一般 < 1 秒）
+    stop_grace_period: 20s
+
+    # 单条日志上限，避免长跑把磁盘写满（代理测速日志量不小）
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 可选：Cloudflare Tunnel
+  # 默认不启动。要用时：
+  #   docker compose --profile tunnel up -d
+  # 需要先在 .env 里填 CLOUDFLARE_TUNNEL_TOKEN（Zero Trust → Networks → Tunnels
+  # 创建隧道后拿到的那串 token），并把隧道 Public Hostname 指向
+  # http://app:3000（容器内用服务名互相访问）。
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: proxy-hunter-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:-}"
+    depends_on:
+      - app
+    profiles: ["tunnel"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

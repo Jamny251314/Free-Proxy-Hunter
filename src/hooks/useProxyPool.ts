@@ -15,6 +15,7 @@ import {
   TargetInfo,
   TaskProgress,
 } from '../proxy-types';
+import { apiUrl } from '../api';
 
 export interface ProxyFilters {
   status: string;
@@ -114,7 +115,7 @@ export function useProxyPool() {
     params.set('limit', '2000');
 
     try {
-      const res = await fetch(`/api/proxy/pool?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/proxy/pool?${params.toString()}`));
       const data = await res.json();
       setRecords(data.records ?? []);
       setStats(data.stats ?? EMPTY_STATS);
@@ -132,7 +133,7 @@ export function useProxyPool() {
 
   const refreshSources = useCallback(async () => {
     try {
-      const res = await fetch('/api/proxy/sources');
+      const res = await fetch(apiUrl('/api/proxy/sources'));
       const data = await res.json();
       setSources(data.sources ?? []);
     } catch (e) {
@@ -149,7 +150,7 @@ export function useProxyPool() {
 
     const connect = () => {
       if (closed) return;
-      source = new EventSource('/api/proxy/stream');
+      source = new EventSource(apiUrl('/api/proxy/stream'));
 
       source.onopen = () => setConnected(true);
 
@@ -226,7 +227,7 @@ export function useProxyPool() {
 
   const post = useCallback(
     async <T,>(url: string, body?: unknown): Promise<T> => {
-      const res = await fetch(url, {
+      const res = await fetch(apiUrl(url), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),
@@ -291,7 +292,7 @@ export function useProxyPool() {
 
   const removeOne = useCallback(
     async (id: string) => {
-      const res = await fetch(`/api/proxy/pool/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/api/proxy/pool/${encodeURIComponent(id)}`), { method: 'DELETE' });
       if (!res.ok) throw new Error('删除失败');
       setRecords((prev) => prev.filter((r) => r.id !== id));
     },
@@ -299,7 +300,7 @@ export function useProxyPool() {
   );
 
   const clearAll = useCallback(async () => {
-    const res = await fetch('/api/proxy/pool', { method: 'DELETE' });
+    const res = await fetch(apiUrl('/api/proxy/pool'), { method: 'DELETE' });
     if (!res.ok) throw new Error('清空失败');
     setRecords([]);
     await refresh();
@@ -307,7 +308,7 @@ export function useProxyPool() {
 
   const saveConfig = useCallback(
     async (patch: Partial<EngineConfig>) => {
-      const res = await fetch('/api/proxy/config', {
+      const res = await fetch(apiUrl('/api/proxy/config'), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),

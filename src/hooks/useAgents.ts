@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CustomAgent } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { apiUrl } from '../api';
 
 const STORAGE_KEY = 'customAgents';
 
@@ -42,7 +43,7 @@ export function useAgents() {
   // 从后端拉取权威提示词，替换默认 Agent 的 systemPrompt（单一事实来源）
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/proxy/agent-prompt')
+    fetch(apiUrl('/api/proxy/agent-prompt'))
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { prompt?: string; name?: string } | null) => {
         if (cancelled || !data?.prompt) return;

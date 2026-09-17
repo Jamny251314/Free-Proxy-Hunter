@@ -1,0 +1,85 @@
+# 免费代理猎手 · systemd 服务单元
+# ---------------------------------------------------------------
+# 适用于 CentOS / Rocky / Alma / Ubuntu / Debian（含 systemd 的发行版通用）
+#
+# 安装步骤（命令里的路径按需替换）：
+#   1. 建专用用户（不要用 root 跑）
+#        sudo useradd -r -m -d /var/lib/proxy-hunter -s /sbin/nologin proxyhunter
+#   2. 放代码
+#        sudo mkdir -p /opt/proxy-hunter-agent
+#        sudo cp -r . /opt/proxy-hunter-agent/          # 不含 node_modules / data
+#        cd /opt/proxy-hunter-agent
+#        sudo -u proxyhunter npm ci --omit=dev          # 精简网络下加 --ignore-scripts
+#        # 前端产物二选一：本地 build 后上传 dist/，或在服务器上 npm install && npm run build
+#   3. 密钥单独放一个只有 root 能读的文件（见下方 EnvironmentFile）
+#        sudo install -m 600 -o proxyhunter -g proxyhunter .env /opt/proxy-hunter-agent/.env
+#   4. 数据目录
+#        sudo mkdir -p /var/lib/proxy-hunter && sudo chown proxyhunter:proxyhunter /var/lib/proxy-hunter
+#   5. 启用
+#        sudo cp deploy/proxy-hunter.service /etc/systemd/system/
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now proxy-hunter
+#        sudo systemctl status proxy-hunter
+#        journalctl -u proxy-hunter -f
+
+[Unit]
+Description=免费代理猎手 · Free Proxy Hunter Agent
+Documentation=https://github.com/your-name/proxy-hunter-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ---- 身份与工作目录 ----
+User=proxyhunter
+Group=proxyhunter
+WorkingDirectory=/opt/proxy-hunter-agent
+
+# ---- 配置 ----
+# 密钥与业务变量都从 .env 读，权限 600，属主为运行用户。
+# 不要把它们写成本单元的 Environment= ：unit 文件通常是 644，同机任何用户都能读到 API Key。
+EnvironmentFile=/opt/proxy-hunter-agent/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# 只监听回环，强制所有外部访问都经过 Nginx / Cloudflare Tunnel
+Environment=HOST=127.0.0.1
+# 数据放在 /var/lib 而不是代码目录里：
+# 代码目录可以整体覆盖升级，数据目录不该跟着被覆盖。
+Environment=DATA_DIR=/var/lib/proxy-hunter
+
+ExecStart=/usr/bin/node /opt/proxy-hunter-agent/node_modules/tsx/dist/cli.mjs server/index.ts
+
+# ---- 退出与重启 ----
+# 直接 exec node：少一层 npm 进程，SIGTERM 才能直达应用，
+# 优雅退出（把防抖中的代理池写盘）才会真正执行。
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=5
+
+# ---- 加固 ----
+# 这里刻意**没有**启用 ProtectSystem=strict / ProtectHome=true，原因不是偷懒：
+#   · 本应用的 Agent 按设计会读写项目文件（例如「帮我加一个代理源」会改 server/proxy/sources.ts），
+#     把文件系统整体设成只读会直接废掉这个能力；
+#   · Agent SDK 会拉起 CodeBuddy CLI，它需要一个可写的 HOME（缓存/配置）。
+#     用 ProtectHome=true 会让 CLI 起不来。
+# 因此只保留不会破坏功能的那几项：
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# 限制进程数与文件描述符，避免异常时把机器拖垮（测速会开大量并发连接）
+LimitNOFILE=65535
+TasksMax=512
+
+# ---- 日志 ----
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proxy-hunter
+
+[Install]
+WantedBy=multi-user.target

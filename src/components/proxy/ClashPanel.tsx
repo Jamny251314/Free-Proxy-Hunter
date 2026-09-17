@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, MessagePlugin, Tag } from 'tdesign-react';
 import { Copy, Download, Link2 } from 'lucide-react';
+import { apiUrl } from '../../api';
 
 interface Props {
   aliveCount: number;
@@ -18,7 +19,7 @@ export function ClashPanel({ aliveCount }: Props) {
   const [tab, setTab] = useState<'provider' | 'snippet'>('provider');
 
   useEffect(() => {
-    fetch('/api/proxy/clash-snippet')
+    fetch(apiUrl('/api/proxy/clash-snippet'))
       .then((r) => r.json())
       .then(setInfo)
       .catch(() => setInfo(null));

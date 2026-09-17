@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, ToolCall, PermissionRequest, PermissionMode, Session, CustomAgent, ContentBlock } from '../types';
+import { apiUrl } from '../api';
 
 const STORAGE_KEYS = {
   draftInput: 'draftInput',
@@ -133,7 +134,7 @@ export function useChat(options: UseChatOptions) {
     const systemPrompt = agent?.systemPrompt;
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -347,7 +348,7 @@ export function useChat(options: UseChatOptions) {
     
     console.log('[Permission] User allowed:', permissionRequest.requestId);
     
-    await fetch('/api/permission-response', {
+    await fetch(apiUrl('/api/permission-response'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -365,7 +366,7 @@ export function useChat(options: UseChatOptions) {
     
     console.log('[Permission] User denied:', permissionRequest.requestId);
     
-    await fetch('/api/permission-response', {
+    await fetch(apiUrl('/api/permission-response'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
