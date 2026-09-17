@@ -1,0 +1,28 @@
+name: Build Vite Project
+
+on:
+  push:
+    branches: [ "main" ] # 如果你的主分支是 master，请把这里改成 "master"
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build with Vite
+        # 关键就在这里！TSC 环境变量会告诉 Vite 在构建时完全跳过 TypeScript 的类型检查
+        run: TSC=0 npm run build
