@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": false,
+    // 显式固定需要自动纳入的环境类型。不写 types 时 TypeScript 会把 node_modules/@types/
+    // 下的**每一个**包都纳入编译，因此任何一个残缺（只剩 README.md、缺 index.d.ts）的
+    // 传递依赖都会让 tsc -b 报 TS2688 而失败 —— 本项目不需要 d3-*/geojson/qs 这些类型。
+    "types": ["react", "react-dom"]
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    // 见 tsconfig.json 同名说明：显式固定 types，避免被残缺的传递 @types 包拖垮构建。
+    // 这里覆盖 vite.config.ts 与 server/**，主要需要 node 类型（process / Buffer / fs）。
+    "types": ["node"],
+    "outDir": "./node_modules/.cache/tsc-node",
+    "tsBuildInfoFile": "./node_modules/.cache/tsc-node/tsconfig.node.tsbuildinfo"
+  },
+  "include": ["vite.config.ts", "server/**/*.ts"],
+  "exclude": ["node_modules/.cache"]
+}
